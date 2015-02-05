@@ -44,21 +44,7 @@ except AttributeError:
 LOG = logging.getLogger(__name__)
 
 
-@sensitive_post_parameters()
-@csrf_protect
-@never_cache
-def login(request, template_name=None, extra_context=None, **kwargs):
-    """Logs a user in using the :class:`~openstack_auth.forms.Login` form."""
-    if not request.is_ajax():
-        # If the user is already authenticated, redirect them to the
-        # dashboard straight away, unless the 'next' parameter is set as it
-        # usually indicates requesting access to a page that requires different
-        # permissions.
-        if (request.user.is_authenticated() and
-                auth.REDIRECT_FIELD_NAME not in request.GET and
-                auth.REDIRECT_FIELD_NAME not in request.POST):
-            return shortcuts.redirect(settings.LOGIN_REDIRECT_URL)
-
+def _default_login(request, template_name=None, extra_context=None, **kwargs):
     # Get our initial region for the form.
     initial = {}
     current_region = request.session.get('region_endpoint', None)
@@ -93,11 +79,40 @@ def login(request, template_name=None, extra_context=None, **kwargs):
                                   authentication_form=form,
                                   extra_context=extra_context,
                                   **kwargs)
+
     # Save the region in the cookie, this is used as the default
     # selected region next time the Login form loads.
     if request.method == "POST":
         utils.set_response_cookie(res, 'login_region',
                                   request.POST.get('region', ''))
+
+    return res
+
+
+@sensitive_post_parameters()
+@csrf_protect
+@never_cache
+def login(request, **kwargs):
+    """Logs a user in using the :class:`~openstack_auth.forms.Login` form."""
+    if not request.is_ajax():
+        # If the user is already authenticated, redirect them to the
+        # dashboard straight away, unless the 'next' parameter is set as it
+        # usually indicates requesting access to a page that requires different
+        # permissions.
+        if (request.user.is_authenticated() and
+                auth.REDIRECT_FIELD_NAME not in request.GET and
+                auth.REDIRECT_FIELD_NAME not in request.POST):
+            return shortcuts.redirect(settings.LOGIN_REDIRECT_URL)
+
+    # NOTE(jamielennox): First we offer a backend the chance to do
+    # authentication based purely on what is available on the request. For
+    # example using REMOTE_USER or kerberos.
+    user = auth.authenticate(request=request)
+    if user:
+        auth.login(request, user)
+        res = shortcuts.redirect(settings.LOGIN_REDIRECT_URL)
+    else:
+        res = _default_login(request, **kwargs)
 
     # Set the session data here because django's session key rotation
     # will erase it if we set it earlier.
@@ -109,6 +124,7 @@ def login(request, template_name=None, extra_context=None, **kwargs):
         request.session['region_endpoint'] = region
         request.session['region_name'] = region_name
         request.session['last_activity'] = int(time.time())
+
     return res
 
 

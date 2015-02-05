@@ -211,19 +211,6 @@ def fix_auth_url_version(auth_url):
     return auth_url
 
 
-def get_password_auth_plugin(auth_url, username, password, user_domain_name):
-    if get_keystone_version() >= 3:
-        return v3_auth.Password(auth_url=auth_url,
-                                username=username,
-                                password=password,
-                                user_domain_name=user_domain_name)
-
-    else:
-        return v2_auth.Password(auth_url=auth_url,
-                                username=username,
-                                password=password)
-
-
 def get_token_auth_plugin(auth_url, token, project_id):
     if get_keystone_version() >= 3:
         return v3_auth.Token(auth_url=auth_url,

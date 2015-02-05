@@ -14,10 +14,19 @@
 """ Module defining the Django auth backend class for the Keystone API. """
 
 import logging
+import os
 
 from django.conf import settings
 from django.utils.translation import ugettext_lazy as _
 from keystoneclient import exceptions as keystone_exceptions
+
+from keystoneclient.auth.identity import v2 as v2_auth
+from keystoneclient.auth.identity import v3 as v3_auth
+try:
+    from keystoneclient_kerberos import v3 as v3_kerb_auth
+except ImportError:
+    v3_kerb_auth = None
+
 
 from openstack_auth import exceptions
 from openstack_auth import user as auth_user
@@ -28,6 +37,61 @@ LOG = logging.getLogger(__name__)
 
 
 KEYSTONE_CLIENT_ATTR = "_keystoneclient"
+
+
+class KeystonePlugin(object):
+
+    def get_plugin(self, auth_url=None, **kwargs):
+        return None
+
+
+class PasswordPlugin(KeystonePlugin):
+
+    def get_plugin(self, auth_url=None, username=None, password=None,
+                   user_domain_name=None, **kwargs):
+        if not all(auth_url, username, password):
+            return None
+
+        if utils.get_keystone_version() >= 3:
+            return v3_auth.Password(auth_url=auth_url,
+                                    username=username,
+                                    password=password,
+                                    user_domain_name=user_domain_name)
+
+        else:
+            return v2_auth.Password(auth_url=auth_url,
+                                    username=username,
+                                    password=password)
+
+
+class KerberosPlugin(KeystonePlugin):
+
+    def get_plugin(self, request=None, auth_url=None, **kwargs):
+        if not v3_kerb_auth:
+            return None
+
+        if not request:
+            return None
+
+        if not utils.get_keystone_version() >= 3:
+            return None
+
+        ticket = request.environ.get('KRB5CCNAME')
+
+        if not ticket:
+            return None
+
+        os.environ['KRB5CCNAME'] = ticket
+
+        # NOTE(jamielennox): HAAACCCCCKKKKKk......
+        s = auth_url.split('/')
+        s.insert(-1, 'krb')
+        auth_url = '/'.join(s)
+
+        return v3_kerb_auth.Kerberos(auth_url=auth_url)
+
+
+AUTH_PLUGINS = [KerberosPlugin(), PasswordPlugin()]
 
 
 class KeystoneBackend(object):
@@ -64,24 +128,27 @@ class KeystoneBackend(object):
         else:
             return None
 
-    def authenticate(self, request=None, username=None, password=None,
-                     user_domain_name=None, auth_url=None):
+    def authenticate(self, auth_url=None, request=None, **kwargs):
         """Authenticates a user via the Keystone Identity API."""
-        LOG.debug('Beginning user authentication for user "%s".' % username)
+        LOG.debug('Beginning user authentication')
 
-        interface = getattr(settings, 'OPENSTACK_ENDPOINT_TYPE', 'public')
-
-        if auth_url is None:
+        if not auth_url:
             auth_url = settings.OPENSTACK_KEYSTONE_URL
+
+        auth_url = utils.fix_auth_url_version(auth_url)
+
+        for plugin in AUTH_PLUGINS:
+            unscoped_auth = plugin.get_plugin(auth_url=auth_url,
+                                              request=request,
+                                              **kwargs)
+
+            if unscoped_auth:
+                break
+        else:
+            return None
 
         session = utils.get_session()
         keystone_client_class = utils.get_keystone_client().Client
-
-        auth_url = utils.fix_auth_url_version(auth_url)
-        unscoped_auth = utils.get_password_auth_plugin(auth_url,
-                                                       username,
-                                                       password,
-                                                       user_domain_name)
 
         try:
             unscoped_auth_ref = unscoped_auth.get_access(session)
@@ -100,6 +167,9 @@ class KeystoneBackend(object):
 
         # Check expiry for our unscoped auth ref.
         self.check_auth_expiry(unscoped_auth_ref)
+
+        # NOTE(jamielennox): HAACCCKKKK....
+        unscoped_auth.auth_url = auth_url
 
         unscoped_client = keystone_client_class(session=session,
                                                 auth=unscoped_auth)
@@ -159,6 +229,8 @@ class KeystoneBackend(object):
         # Check expiry for our new scoped token.
         self.check_auth_expiry(scoped_auth_ref)
 
+        interface = getattr(settings, 'OPENSTACK_ENDPOINT_TYPE', 'public')
+
         # If we made it here we succeeded. Create our User!
         user = auth_user.create_user_from_token(
             request,
@@ -174,7 +246,7 @@ class KeystoneBackend(object):
             # Support client caching to save on auth calls.
             setattr(request, KEYSTONE_CLIENT_ATTR, scoped_client)
 
-        LOG.debug('Authentication completed for user "%s".' % username)
+        LOG.debug('Authentication completed.')
         return user
 
     def get_group_permissions(self, user, obj=None):
