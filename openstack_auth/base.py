@@ -38,8 +38,25 @@ class BaseIdentityAuthentication(object):
     others.
     """
 
-    def __init__(self):
-        self._request = None
+    def get_user(self, user_id):
+        """Returns the current user from the session data.
+
+        If authenticated, this return the user object based on the user ID
+        and session data.
+
+        Note: this required monkey-patching the ``contrib.auth`` middleware
+        to make the ``request`` object available to the auth backend class.
+        """
+        if (hasattr(self, 'request') and
+                user_id == self.request.session["user_id"]):
+            token = self.request.session['token']
+            endpoint = self.request.session['region_endpoint']
+            services_region = self.request.session['services_region']
+            user = auth_user.create_user_from_token(self.request, token,
+                                                    endpoint, services_region)
+            return user
+        else:
+            return None
 
     def authenticate(self, auth_url=None, request=None, **kwargs):
         default_kwargs = self.get_default_arguments()
@@ -56,99 +73,6 @@ class BaseIdentityAuthentication(object):
         return self.do_authenticate(auth_url=auth_url,
                                     request=request,
                                     **default_kwargs)
-
-    def get_user(self, user_id):
-        """Returns the current user from the session data.
-
-        If authenticated, this return the user object based on the user ID
-        and session data.
-
-        Note: this required monkey-patching the ``contrib.auth`` middleware
-        to make the ``request`` object available to the auth backend class.
-        """
-        if not self._request:
-            return None
-
-        if user_id != self._request.session["user_id"]:
-            return None
-
-        token = self._request.session['token']
-        endpoint = self._request.session['region_endpoint']
-        services_region = self._request.session['services_region']
-        return auth_user.create_user_from_token(self._request,
-                                                token,
-                                                endpoint,
-                                                services_region)
-
-    def get_group_permissions(self, user, obj=None):
-        """Returns an empty set since Keystone doesn't support "groups"."""
-        # Keystone V3 added "groups". The Auth token response includes the
-        # roles from the user's Group assignment. It should be fine just
-        # returning an empty set here.
-        return set()
-
-    def get_all_permissions(self, user, obj=None):
-        """Returns a set of permission strings that the user has.
-
-        This permission available to the user is derived from the user's
-        Keystone "roles".
-
-        The permissions are returned as ``"openstack.{{ role.name }}"``.
-        """
-        if user.is_anonymous() or obj is not None:
-            return set()
-        # TODO(gabrielhurley): Integrate policy-driven RBAC
-        #                      when supported by Keystone.
-        role_perms = set(["openstack.roles.%s" % role['name'].lower()
-                          for role in user.roles])
-        service_perms = set(["openstack.services.%s" % service['type'].lower()
-                             for service in user.service_catalog
-                             if user.services_region in
-                             [endpoint.get('region', None) for endpoint
-                              in service.get('endpoints', [])]])
-        return role_perms | service_perms
-
-    def has_perm(self, user, perm, obj=None):
-        """Returns True if the given user has the specified permission."""
-        if not user.is_active:
-            return False
-        return perm in self.get_all_permissions(user, obj)
-
-    def has_module_perms(self, user, app_label):
-        """Returns True if user has any permissions in the given app_label.
-
-        Currently this matches for the app_label ``"openstack"``.
-        """
-        if not user.is_active:
-            return False
-        for perm in self.get_all_permissions(user):
-            if perm[:perm.index('.')] == app_label:
-                return True
-        return False
-
-    def get_default_arguments(self):
-        return dict(
-            interface=getattr(settings, 'OPENSTACK_ENDPOINT_TYPE', 'public'),
-        )
-
-    @property
-    def keystone_client_class(self):
-        return utils.get_keystone_client().Client
-
-    @property
-    def keystone_version(self):
-        return utils.get_keystone_version()
-
-    def _check_auth_expiry(self, auth_ref, margin=None):
-        if not utils.is_token_valid(auth_ref, margin):
-            msg = _("The authentication token issued by the Identity service "
-                    "has expired.")
-            LOG.warning("The authentication token issued by the Identity "
-                        "service appears to have expired before it was "
-                        "issued. This may indicate a problem with either your "
-                        "server or client configuration.")
-            raise exceptions.KeystoneAuthException(msg)
-        return True
 
     def do_authenticate(self, request, auth_url, **kwargs):
         session = utils.get_session()
@@ -243,10 +167,97 @@ class BaseIdentityAuthentication(object):
         LOG.debug('Authentication completed for user')
         return user
 
+    def get_group_permissions(self, user, obj=None):
+        """Returns an empty set since Keystone doesn't support "groups"."""
+        # Keystone V3 added "groups". The Auth token response includes the
+        # roles from the user's Group assignment. It should be fine just
+        # returning an empty set here.
+        return set()
+
+    def get_all_permissions(self, user, obj=None):
+        """Returns a set of permission strings that the user has.
+
+        This permission available to the user is derived from the user's
+        Keystone "roles".
+
+        The permissions are returned as ``"openstack.{{ role.name }}"``.
+        """
+        if user.is_anonymous() or obj is not None:
+            return set()
+        # TODO(gabrielhurley): Integrate policy-driven RBAC
+        #                      when supported by Keystone.
+        role_perms = set(["openstack.roles.%s" % role['name'].lower()
+                          for role in user.roles])
+        service_perms = set(["openstack.services.%s" % service['type'].lower()
+                             for service in user.service_catalog
+                             if user.services_region in
+                             [endpoint.get('region', None) for endpoint
+                              in service.get('endpoints', [])]])
+        return role_perms | service_perms
+
+    def has_perm(self, user, perm, obj=None):
+        """Returns True if the given user has the specified permission."""
+        if not user.is_active:
+            return False
+        return perm in self.get_all_permissions(user, obj)
+
+    def has_module_perms(self, user, app_label):
+        """Returns True if user has any permissions in the given app_label.
+
+        Currently this matches for the app_label ``"openstack"``.
+        """
+        if not user.is_active:
+            return False
+        for perm in self.get_all_permissions(user):
+            if perm[:perm.index('.')] == app_label:
+                return True
+        return False
+
+    def get_default_arguments(self):
+        """Parameters that come from the settings file for auth.
+
+        Fetch all the values from the settings file that may be required in
+        authentication. The authentication should not need to call out to
+        settings.
+
+        :returns: A dictionary of settings to pass to authenticate.
+        :rtype: dict
+        """
+        return dict(
+            interface=getattr(settings, 'OPENSTACK_ENDPOINT_TYPE', 'public'),
+        )
+
+    @property
+    def keystone_client_class(self):
+        """Get the keystone client class for the version specified.
+
+        Fetch the V2 or V3 keytoneclient Client class depending on what version
+        is specified in the settings file.
+        """
+        return utils.get_keystone_client().Client
+
+    @property
+    def keystone_version(self):
+        """The Identity API version as specified in the settings file."""
+        return utils.get_keystone_version()
+
     def get_unscoped_plugin(self, **kwargs):
+        """Fetch an unscoped plugin capable of handling the arguments.
+
+        Provide a keystoneclient auth plugin loaded with the provided
+        parameters.
+
+        :returns: An auth plugin or None if one cannot be created.
+        :rtype: py:class:`keystoneclient.auth.identity.BaseIdentityPlugin`
+        """
         raise NotImplemented()
 
     def get_scoped_plugin(self, auth_url, token, project):
+        """Get a plugin that scoped an existing token to a new project.
+
+        :returns: An auth plugin.
+        :rtype: py:class:`keystoneclient.auth.identity.BaseIdentityPlugin`
+        """
         return utils.get_token_auth_plugin(auth_url,
                                            token=token,
                                            project_id=project.id)
@@ -269,3 +280,15 @@ class BaseIdentityAuthentication(object):
             raise exceptions.KeystoneAuthException(msg)
 
         return projects
+
+    @staticmethod
+    def _check_auth_expiry(auth_ref, margin=None):
+        if not utils.is_token_valid(auth_ref, margin):
+            msg = _("The authentication token issued by the Identity service "
+                    "has expired.")
+            LOG.warning("The authentication token issued by the Identity "
+                        "service appears to have expired before it was "
+                        "issued. This may indicate a problem with either your "
+                        "server or client configuration.")
+            raise exceptions.KeystoneAuthException(msg)
+        return True
