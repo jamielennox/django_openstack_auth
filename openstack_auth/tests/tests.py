@@ -51,6 +51,8 @@ class OpenStackAuthTestsMixin(object):
         plugin = self._create_password_auth()
         plugin.get_access(mox.IsA(session.Session)). \
             AndReturn(self.data.unscoped_access_info)
+        plugin.get_user_id(mox.IsA(session.Session)). \
+            AndReturn(self.data.unscoped_access_info.user_id)
         return self.ks_client_module.Client(session=mox.IsA(session.Session),
                                             auth=plugin)
 
@@ -686,6 +688,7 @@ class OpenStackAuthTestsV3(OpenStackAuthTestsMixin, test.TestCase):
         if next:
             form_data.update({auth.REDIRECT_FIELD_NAME: next})
 
+        import ipdb; ipdb.set_trace()
         response = self.client.get(url, form_data)
 
         if next:
