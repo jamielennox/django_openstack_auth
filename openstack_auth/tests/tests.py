@@ -47,12 +47,13 @@ class OpenStackAuthTestsMixin(object):
         ('admin', {'interface': 'adminURL'})
     ]
 
-    def _mock_unscoped_client(self, user):
+    def _mock_unscoped_client(self, user, user_id=False):
         plugin = self._create_password_auth()
         plugin.get_access(mox.IsA(session.Session)). \
             AndReturn(self.data.unscoped_access_info)
-        plugin.get_user_id(mox.IsA(session.Session)). \
-            AndReturn(self.data.unscoped_access_info.user_id)
+        if user_id:
+            plugin.get_user_id(mox.IsA(session.Session)). \
+                AndReturn(self.data.unscoped_access_info.user_id)
         return self.ks_client_module.Client(session=mox.IsA(session.Session),
                                             auth=plugin)
 
@@ -469,7 +470,7 @@ class OpenStackAuthTestsV2(OpenStackAuthTestsMixin, test.TestCase):
 class OpenStackAuthTestsV3(OpenStackAuthTestsMixin, test.TestCase):
 
     def _mock_unscoped_client_list_projects(self, user, projects):
-        client = self._mock_unscoped_client(user)
+        client = self._mock_unscoped_client(user, user_id=True)
         self._mock_unscoped_list_projects(client, user, projects)
 
     def _mock_unscoped_list_projects(self, client, user, projects):
@@ -688,7 +689,6 @@ class OpenStackAuthTestsV3(OpenStackAuthTestsMixin, test.TestCase):
         if next:
             form_data.update({auth.REDIRECT_FIELD_NAME: next})
 
-        import ipdb; ipdb.set_trace()
         response = self.client.get(url, form_data)
 
         if next:

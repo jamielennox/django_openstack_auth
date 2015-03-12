@@ -160,7 +160,6 @@ def delete_token(endpoint, token_id):
 @login_required
 def switch(request, tenant_id, redirect_field_name=auth.REDIRECT_FIELD_NAME):
     """Switches an authenticated user from one project to another."""
-    import ipdb; ipdb.set_trace()
     LOG.debug('Switching to tenant %s for user "%s".'
               % (tenant_id, request.user.username))
 
@@ -210,7 +209,6 @@ def switch_region(request, region_name,
     The region will be switched if the given region is one of the regions
     available for the scoped project. Otherwise the region is not switched.
     """
-    import ipdb; ipdb.set_trace()
     if region_name in request.user.available_services_regions:
         request.session['services_region'] = region_name
         LOG.debug('Switching services region to %s for user "%s".'
