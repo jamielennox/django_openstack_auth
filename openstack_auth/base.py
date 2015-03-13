@@ -78,7 +78,9 @@ class BaseIdentityAuthentication(object):
         session = utils.get_session()
         interface = kwargs.pop('interface')
 
-        unscoped_auth = self.get_unscoped_plugin(auth_url=auth_url, **kwargs)
+        unscoped_auth = self.get_unscoped_plugin(auth_url=auth_url,
+                                                 request=request,
+                                                 **kwargs)
 
         if not unscoped_auth:
             return None
