@@ -58,12 +58,24 @@ def login(request, template_name=None, extra_context=None, **kwargs):
     # If the user enabled websso and selects default protocol
     # from the dropdown, We need to redirect user to the websso url
     if request.method == 'POST':
-        protocol = request.POST.get('auth_type', 'credentials')
-        if utils.is_websso_enabled() and protocol != 'credentials':
+        idp_choice = request.POST.get('auth_type', 'credentials')
+        if utils.is_websso_enabled() and idp_choice != 'credentials':
+            idps = getattr(settings, 'WEBSSO_IDPS', {})
             region = request.POST.get('region')
             origin = utils.build_absolute_uri(request, '/auth/websso/')
-            url = ('%s/auth/OS-FEDERATION/websso/%s?origin=%s' %
-                   (region, protocol, origin))
+
+            # if the choice for WEBSSO is in the WEBSSO_IDPS dictionary then
+            # we consult it to figure out the idp_id and the protocol to
+            # redirect to otherwise we assume the choice was the protocol and
+            # redirect to the global websso route
+            if idp_choice in idps:
+                idp_id, protocol = idps[idp_choice]
+                path = 'identity_providers/%s/protocols/%s/websso' % (
+                    idp_id, protocol)
+            else:
+                path = 'websso/%s' % idp_choice
+
+            url = '%s/auth/OS-FEDERATION/%s?origin=%s' % (region, path, origin)
             return shortcuts.redirect(url)
 
     if not request.is_ajax():
